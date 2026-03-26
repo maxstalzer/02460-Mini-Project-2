@@ -299,7 +299,7 @@ if __name__ == "__main__":
         "mode",
         type=str,
         default="train",
-        choices=["train", "sample", "eval", "geodesics"],
+        choices=["train", "sample", "eval", "geodesics", "eval_cov"],
         help="what to do when running the script (default: %(default)s)",
     )
     parser.add_argument(
@@ -615,7 +615,7 @@ if __name__ == "__main__":
     elif args.mode == "eval_cov":
         print("Starting CoV Evaluation...")
         
-        # 1. FIX THE TEST POINTS (Crucial for a fair comparison)
+        # FIX THE TEST POINTS
         torch.manual_seed(42) 
         test_data_full = torch.cat([x for x, _ in mnist_test_loader], dim=0).to(device)
         
@@ -625,23 +625,28 @@ if __name__ == "__main__":
             idx = torch.randint(0, len(test_data_full), (2,))
             fixed_pairs.append((test_data_full[idx[0]:idx[0]+1], test_data_full[idx[1]:idx[1]+1]))
 
-        # We will test 1, 2, and 3 decoders
+        # We will test 1, 2 and 3 decoders
         decoders_list = [1, 2, 3]
         runs_list = range(1, args.num_reruns + 1)
         
         cov_euclidean = []
         cov_geodesic = []
 
-        # 2. LOOP OVER ARCHITECTURES
+        # Open a text file to save the report data
+        report_file = open(f"{args.experiment_folder}/cov_report.txt", "w")
+        report_file.write("--- Coefficient of Variation (CoV) Report ---\n\n")
+
+        # LOOP OVER ARCHITECTURES
         for num_decs in decoders_list:
-            print(f"\n--- Evaluating Models with {num_decs} Decoders ---")
+            print(f"\n==============================================")
+            print(f"Evaluating Models with {num_decs} Decoder(s)")
+            print(f"==============================================")
             
             euc_dists = torch.zeros((num_pairs, args.num_reruns))
             geo_dists = torch.zeros((num_pairs, args.num_reruns))
             
-            # 3. LOOP OVER THE 10 RETRAININGS
+            # LOOP OVER THE 10 RETRAININGS
             for run_idx, run in enumerate(runs_list):
-                # Load the specific model from the mass-training loop
                 model_path = f"{args.experiment_folder}/model_dec{num_decs}_run{run}/model.pt"
                 
                 ensemble_list = [new_decoder() for _ in range(num_decs)]
@@ -649,22 +654,22 @@ if __name__ == "__main__":
                 model.load_state_dict(torch.load(model_path))
                 model.eval()
                 
-                # 4. LOOP OVER THE 10 FIXED IMAGE PAIRS
+                # LOOP OVER THE 10 FIXED IMAGE PAIRS
                 for pair_idx, (x_start, x_end) in enumerate(fixed_pairs):
                     z_start = model.encoder(x_start).mean.detach()
                     z_end = model.encoder(x_end).mean.detach()
                     
-                    # --- Compute Euclidean Distance ---
+                    # Compute Euclidean Distance
                     euc_dist = torch.norm(z_start - z_end).item()
                     euc_dists[pair_idx, run_idx] = euc_dist
                     
-                    # --- Compute Geodesic Distance ---
+                    # Compute Geodesic Distance
                     t = torch.linspace(0, 1, args.num_t).view(-1, 1).to(device)
                     z_curve_init = (1 - t) * z_start + t * z_end
                     z_intermediate = z_curve_init[1:-1].clone().detach().requires_grad_(True)
                     curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-2) 
                     
-                    # Find the shortest path (using our exact expectation function)
+                    # Find the shortest path
                     optimized_curve = optimize_geodesic(
                         model=model, z_start=z_start, z_intermediate=z_intermediate, 
                         z_end=z_end, optimizer=curve_optimizer, num_steps=200 
@@ -678,8 +683,7 @@ if __name__ == "__main__":
                     
                     geo_dists[pair_idx, run_idx] = geo_dist
                     
-            # 5. CALCULATE CoV (Standard Deviation / Mean)
-            # We calculate CoV across the 10 runs for EACH pair, then average them.
+            # CALCULATE CoV (Standard Deviation / Mean)
             euc_std = euc_dists.std(dim=1)
             euc_mean = euc_dists.mean(dim=1)
             euc_cov = (euc_std / euc_mean).mean().item() 
@@ -691,10 +695,20 @@ if __name__ == "__main__":
             cov_euclidean.append(euc_cov)
             cov_geodesic.append(geo_cov)
             
-            print(f"Avg Euclidean CoV: {euc_cov:.4f}")
-            print(f"Avg Geodesic CoV: {geo_cov:.4f}")
+            # Print to console
+            print(f"Results for {num_decs} Decoder(s):")
+            print(f"  -> Average Euclidean CoV: {euc_cov:.5f}")
+            print(f"  -> Average Geodesic CoV:  {geo_cov:.5f}\n")
+            
+            # Write to the text file
+            report_file.write(f"Results for {num_decs} Decoder(s):\n")
+            report_file.write(f"  Average Euclidean CoV: {euc_cov:.5f}\n")
+            report_file.write(f"  Average Geodesic CoV:  {geo_cov:.5f}\n\n")
 
-        # 6. GENERATE THE FINAL PLOT
+        # Close text file
+        report_file.close()
+
+        # Generate final plot
         plt.figure(figsize=(8, 6))
         plt.plot(decoders_list, cov_euclidean, marker='o', label='Euclidean Distance', linewidth=2)
         plt.plot(decoders_list, cov_geodesic, marker='s', label='Geodesic Distance', linewidth=2)
@@ -707,4 +721,7 @@ if __name__ == "__main__":
         plt.tight_layout()
         plt.savefig(f"{args.experiment_folder}/cov_analysis.png", dpi=300)
         plt.close()
-        print(f"\nSuccess! Saved CoV analysis plot to {args.experiment_folder}/cov_analysis.png")
+        
+        print(f"\nSuccess! ")
+        print(f"- Plot saved to: {args.experiment_folder}/cov_analysis.png")
+        print(f"- Data saved to: {args.experiment_folder}/cov_report.txt")
