@@ -262,7 +262,7 @@ def compute_ensemble_energy(model, z_curve):
 
     return energy
 
-# # Computes the energy of a curve in latent space using the ensemble decoder nets
+# Computes the energy of a curve in latent space using the ensemble decoder nets
 # def compute_ensemble_energy(model, z_curve):
 #     num_decoders = len(model.decoder.decoder_nets)
     
@@ -581,7 +581,7 @@ if __name__ == "__main__":
             z_intermediate = z_curve_init[1:-1].clone().detach().requires_grad_(True)
 
             # Setup optimizer for this specific curve
-            curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-3)
+            curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-5)
 
             # Runs the optimization of the curve
             optimized_curve = optimize_geodesic(
@@ -590,7 +590,7 @@ if __name__ == "__main__":
                 z_intermediate=z_intermediate,
                 z_end=z_end,
                 optimizer=curve_optimizer,
-                num_steps=300
+                num_steps=500
             )
 
             # Add curves to the plot
@@ -619,14 +619,16 @@ if __name__ == "__main__":
         torch.manual_seed(42) 
         test_data_full = torch.cat([x for x, _ in mnist_test_loader], dim=0).to(device)
         
-        num_pairs = 10
+        num_pairs = 1
+        # num_pairs = 10
         fixed_pairs = []
         for _ in range(num_pairs):
             idx = torch.randint(0, len(test_data_full), (2,))
             fixed_pairs.append((test_data_full[idx[0]:idx[0]+1], test_data_full[idx[1]:idx[1]+1]))
 
         # We will test 1, 2 and 3 decoders
-        decoders_list = [1, 2, 3]
+        decoders_list = [2]
+        # decoders_list = [1, 2, 3]
         runs_list = range(1, args.num_reruns + 1)
         
         cov_euclidean = []
@@ -667,20 +669,34 @@ if __name__ == "__main__":
                     t = torch.linspace(0, 1, args.num_t).view(-1, 1).to(device)
                     z_curve_init = (1 - t) * z_start + t * z_end
                     z_intermediate = z_curve_init[1:-1].clone().detach().requires_grad_(True)
-                    curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-2) 
+                    curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-4) 
                     
                     # Find the shortest path
                     optimized_curve = optimize_geodesic(
                         model=model, z_start=z_start, z_intermediate=z_intermediate, 
-                        z_end=z_end, optimizer=curve_optimizer, num_steps=200 
+                        z_end=z_end, optimizer=curve_optimizer, num_steps=500 
                     )
                     
-                    # Calculate the length of that path in the data space
-                    decoded_curve = model.decoder(optimized_curve).mean
-                    diffs = decoded_curve[1:] - decoded_curve[:-1]
-                    segment_lengths = torch.norm(diffs.view(len(diffs), -1), dim=1)
-                    geo_dist = segment_lengths.sum().item()
+                    # Calculate the true Geodesic Distance using the ensemble pull-back metric
+                    with torch.no_grad():
+                        all_decoded = torch.stack([net(optimized_curve) for net in model.decoder.decoder_nets])
+
+                    geo_dist = 0.0
                     
+                    # Look at one segment of the curve at a time
+                    for step in range(len(optimized_curve) - 1):
+                        segment_energy = torch.tensor(0.0, device=device)
+                        
+                        # Exact expectation of the squared distance for the segment
+                        for l in range(num_decs):
+                            for k in range(num_decs):
+                                squared_diff = (all_decoded[l, step] - all_decoded[k, step+1])**2
+                                segment_energy += squared_diff.sum()
+                        
+                        segment_energy = segment_energy / (num_decs * num_decs)
+                        
+                        # Convert segment energy to segment length, then add to total
+                        geo_dist += math.sqrt(segment_energy.item())
                     geo_dists[pair_idx, run_idx] = geo_dist
                     
             # CALCULATE CoV (Standard Deviation / Mean)
@@ -723,5 +739,5 @@ if __name__ == "__main__":
         plt.close()
         
         print(f"\nSuccess! ")
-        print(f"- Plot saved to: {args.experiment_folder}/cov_analysis.png")
-        print(f"- Data saved to: {args.experiment_folder}/cov_report.txt")
+        print(f"- Plot saved to: {args.experiment_folder}/cov_analysis1.png")
+        print(f"- Data saved to: {args.experiment_folder}/cov_report1.txt")
