@@ -3,7 +3,7 @@
 #BSUB -J vae_cov_eval
 #BSUB -n 1
 #BSUB -gpu "num=1:mode=exclusive_process"
-#BSUB -W 02:00
+#BSUB -W 04:00
 #BSUB -R "rusage[mem=8GB]"
 #BSUB -o logs/eval_output_%J.out
 #BSUB -e logs/eval_error_%J.err

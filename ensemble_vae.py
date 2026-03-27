@@ -581,7 +581,7 @@ if __name__ == "__main__":
             z_intermediate = z_curve_init[1:-1].clone().detach().requires_grad_(True)
 
             # Setup optimizer for this specific curve
-            curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-5)
+            curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-4)
 
             # Runs the optimization of the curve
             optimized_curve = optimize_geodesic(
@@ -619,16 +619,14 @@ if __name__ == "__main__":
         torch.manual_seed(42) 
         test_data_full = torch.cat([x for x, _ in mnist_test_loader], dim=0).to(device)
         
-        num_pairs = 1
-        # num_pairs = 10
+        num_pairs = 10
         fixed_pairs = []
         for _ in range(num_pairs):
             idx = torch.randint(0, len(test_data_full), (2,))
             fixed_pairs.append((test_data_full[idx[0]:idx[0]+1], test_data_full[idx[1]:idx[1]+1]))
 
         # We will test 1, 2 and 3 decoders
-        decoders_list = [2]
-        # decoders_list = [1, 2, 3]
+        decoders_list = [1, 2, 3]
         runs_list = range(1, args.num_reruns + 1)
         
         cov_euclidean = []
@@ -696,7 +694,7 @@ if __name__ == "__main__":
                         segment_energy = segment_energy / (num_decs * num_decs)
                         
                         # Convert segment energy to segment length, then add to total
-                        geo_dist += math.sqrt(segment_energy.item())
+                        geo_dist += math.sqrt(max(segment_energy.item(), 0.0))
                     geo_dists[pair_idx, run_idx] = geo_dist
                     
             # CALCULATE CoV (Standard Deviation / Mean)
