@@ -65,39 +65,25 @@ class GaussianEncoder(nn.Module):
         mean, std = torch.chunk(self.encoder_net(x), 2, dim=-1)
         return td.Independent(td.Normal(loc=mean, scale=torch.exp(std)), 1)
 
-
-class GaussianDecoder(nn.ModuleList):
+class GaussianDecoder(nn.Module):
     def __init__(self, decoder_nets):
         """
-        Define a Bernoulli decoder distribution based on a given decoder network.
-
-        Parameters:
-        encoder_net: [torch.nn.Module]
-           The decoder network that takes as a tensor of dim `(batch_size, M) as
-           input, where M is the dimension of the latent space, and outputs a
-           tensor of dimension (batch_size, feature_dim1, feature_dim2).
+        Define a Gaussian decoder distribution based on an ensemble of networks.
         """
         super(GaussianDecoder, self).__init__()
+        # ModuleList ensures all individual decoder parameters are registered with the optimizer
         self.decoder_nets = nn.ModuleList(decoder_nets)
-        # self.std = nn.Parameter(torch.ones(28, 28) * 0.5, requires_grad=True) # In case you want to learn the std of the gaussian.
+        self._step_count = 0
 
     def forward(self, z):
-        """
-        Given a batch of latent variables, return a Bernoulli distribution over the data space.
-
-        Parameters:
-        z: [torch.Tensor]
-           A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
-        """
-        means = torch.zeros_like(self.decoder_nets[0](z))
-
-        for decoder_net in self.decoder_nets:
-            means += decoder_net(z)
-
-        means = means / len(self.decoder_nets)
-
+        if self.training:
+            # Round-robin: guaranteed equal training per decoder
+            idx = self._step_count % len(self.decoder_nets)
+            self._step_count += 1
+            means = self.decoder_nets[idx](z)
+        else:
+            means = sum(net(z) for net in self.decoder_nets) / len(self.decoder_nets)
         return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
-
 
 class VAE(nn.Module):
     """
@@ -240,26 +226,22 @@ def optimize_geodesic(model, z_start, z_intermediate, z_end, optimizer, num_step
     final_curve = torch.cat([z_start, z_intermediate, z_end], dim=0).detach()
     return final_curve
 
-# Computes the energy of a curve in latent space using the ensemble decoder nets
+# Computes the energy of a curve in latent space using the ensemble decoder nets (Monte Carlo Approximation)
 def compute_ensemble_energy(model, z_curve):
-
-    energy = 0.0
     num_decoders = len(model.decoder.decoder_nets)
-
+    
+    # Pre-decode the entire curve once per decoder — O(N) not O(N²)
+    all_decoded = [net(z_curve) for net in model.decoder.decoder_nets]
+    
+    energy = torch.tensor(0.0, device=z_curve.device)
     for i in range(len(z_curve) - 1):
-
-        indices = torch.randint(0, num_decoders, (2,))
-        l = indices[0].item()
-        k = indices[1].item()
-
-        decoder_net_l = model.decoder.decoder_nets[l]
-        decoder_net_k = model.decoder.decoder_nets[k]
-
-        decoded_pts_l = decoder_net_l(z_curve)
-        decoded_pts_k = decoder_net_k(z_curve)
-        squared_diff = (decoded_pts_l[i] - decoded_pts_k[i+1])**2
+        # Monte Carlo sampling of decoder pairs
+        l = torch.randint(0, num_decoders, (1,)).item()
+        k = torch.randint(0, num_decoders, (1,)).item()
+        
+        squared_diff = (all_decoded[l][i] - all_decoded[k][i+1])**2
         energy += squared_diff.sum()
-
+        
     return energy
 
 # Computes the energy of a curve in latent space using the ensemble decoder nets
@@ -468,7 +450,7 @@ if __name__ == "__main__":
             model,
             optimizer,
             mnist_train_loader,
-            args.epochs_per_decoder,
+            args.epochs_per_decoder * args.num_decoders,
             args.device,
         )
         os.makedirs(f"{experiments_folder}", exist_ok=True)
@@ -581,7 +563,7 @@ if __name__ == "__main__":
             z_intermediate = z_curve_init[1:-1].clone().detach().requires_grad_(True)
 
             # Setup optimizer for this specific curve
-            curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-4)
+            curve_optimizer = torch.optim.Adam([z_intermediate], lr=5e-3)
 
             # Runs the optimization of the curve
             optimized_curve = optimize_geodesic(
@@ -590,7 +572,7 @@ if __name__ == "__main__":
                 z_intermediate=z_intermediate,
                 z_end=z_end,
                 optimizer=curve_optimizer,
-                num_steps=500
+                num_steps=2000
             )
 
             # Add curves to the plot
@@ -651,7 +633,7 @@ if __name__ == "__main__":
                 
                 ensemble_list = [new_decoder() for _ in range(num_decs)]
                 model = VAE(GaussianPrior(M), GaussianDecoder(ensemble_list), GaussianEncoder(new_encoder())).to(device)
-                model.load_state_dict(torch.load(model_path))
+                model.load_state_dict(torch.load(model_path, map_location=device))
                 model.eval()
                 
                 # LOOP OVER THE 10 FIXED IMAGE PAIRS
@@ -667,12 +649,12 @@ if __name__ == "__main__":
                     t = torch.linspace(0, 1, args.num_t).view(-1, 1).to(device)
                     z_curve_init = (1 - t) * z_start + t * z_end
                     z_intermediate = z_curve_init[1:-1].clone().detach().requires_grad_(True)
-                    curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-4) 
+                    curve_optimizer = torch.optim.Adam([z_intermediate], lr=5e-3) 
                     
                     # Find the shortest path
                     optimized_curve = optimize_geodesic(
                         model=model, z_start=z_start, z_intermediate=z_intermediate, 
-                        z_end=z_end, optimizer=curve_optimizer, num_steps=500 
+                        z_end=z_end, optimizer=curve_optimizer, num_steps=2000 
                     )
                     
                     # Calculate the true Geodesic Distance using the ensemble pull-back metric

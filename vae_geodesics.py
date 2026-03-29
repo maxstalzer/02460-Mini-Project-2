@@ -525,8 +525,11 @@ if __name__ == "__main__":
             z_curve_init = (1 - t) * z_start + t * z_end
             z_intermediate = z_curve_init[1:-1].clone().detach().requires_grad_(True)
 
+            with torch.no_grad():
+                init_energy = compute_energy(model, z_curve_init).item()
+
             # Setup optimizer for this specific curve
-            curve_optimizer = torch.optim.Adam([z_intermediate], lr=1e-3)
+            curve_optimizer = torch.optim.Adam([z_intermediate], lr=5e-3)
 
             # Runs the optimization of the curve
             optimized_curve = optimize_geodesic(
@@ -535,8 +538,15 @@ if __name__ == "__main__":
                 z_intermediate=z_intermediate,
                 z_end=z_end,
                 optimizer=curve_optimizer,
-                num_steps=300
+                num_steps=2000
             )
+
+            with torch.no_grad():
+                final_energy = compute_energy(model, optimized_curve).item()
+            euc_dist = torch.norm(z_start - z_end).item()
+            reduction = (1 - final_energy / init_energy) * 100 if init_energy > 0 else 0.0
+            print(f"  energy: {init_energy:.4f} → {final_energy:.4f}  "
+                f"({reduction:.1f}% reduction)  euclidean dist: {euc_dist:.4f}")
 
             # Add curves to the plot
             # Convert tensors to numpy arrays for plotting

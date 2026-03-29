@@ -17,7 +17,7 @@ mkdir -p logs
 
 # 2. Define our test parameters
 # (Change these back to 50 and 10 for the real run)
-EPOCHS=20
+EPOCHS=50
 NUM_RUNS=10
 
 echo "Starting VAE Ensemble Batch Job..."
@@ -28,7 +28,7 @@ for decoders in 1 2 3; do
     for run in $(seq 1 $NUM_RUNS); do
         
         # Define the systematic folder name
-        EXPERIMENT_DIR="experiments/model_dec${decoders}_run${run}"
+        EXPERIMENT_DIR="experiments_50epochs/model_dec${decoders}_run${run}"
         
         echo "---------------------------------------------------"
         echo "Training Architecture: $decoders Decoders"
