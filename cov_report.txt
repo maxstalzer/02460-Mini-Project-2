@@ -1,0 +1,14 @@
+--- Coefficient of Variation (CoV) Report ---
+
+Results for 1 Decoder(s):
+  Average Euclidean CoV: 0.17891
+  Average Geodesic CoV:  0.16383
+
+Results for 2 Decoder(s):
+  Average Euclidean CoV: 0.17839
+  Average Geodesic CoV:  0.09498
+
+Results for 3 Decoder(s):
+  Average Euclidean CoV: 0.18091
+  Average Geodesic CoV:  0.08254
+

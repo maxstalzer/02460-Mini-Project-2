@@ -28,7 +28,7 @@ for decoders in 1 2 3; do
     for run in $(seq 1 $NUM_RUNS); do
         
         # Define the systematic folder name
-        EXPERIMENT_DIR="experiments_50epochs/model_dec${decoders}_run${run}"
+        EXPERIMENT_DIR="exp_indep_50epochs/model_dec${decoders}_run${run}"
         
         echo "---------------------------------------------------"
         echo "Training Architecture: $decoders Decoders"
@@ -47,3 +47,11 @@ for decoders in 1 2 3; do
 done
 
 echo "All training runs completed successfully!"
+
+echo "Starting CoV Evaluation..."
+
+# Run the evaluation mode! 
+# Make sure the experiment folder matches where you saved all 30 models
+uv run ensemble_vae.py eval_cov --experiment-folder exp_indep_50epochs --device cuda --num-reruns 10
+
+echo "Evaluation finished!"

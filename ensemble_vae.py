@@ -432,31 +432,63 @@ if __name__ == "__main__":
 
     # Choose mode to run
     if args.mode == "train":
-
         experiments_folder = args.experiment_folder
         os.makedirs(f"{experiments_folder}", exist_ok=True)
-        # New way (Part B)
-        # Create a list of 'N' separate decoders
-        ensemble_list = [new_decoder() for _ in range(args.num_decoders)]
+        
+        # Extract the run ID (e.g., "run1") from the folder string so we can share the base model
+        run_id = experiments_folder.split('_')[-1] 
+        parent_dir = os.path.dirname(experiments_folder)
+        base_model_path = os.path.join(parent_dir, f"base_model_{run_id}.pt")
 
-        model = VAE(
+        # 1. Create a standard, single-decoder VAE
+        base_model = VAE(
             GaussianPrior(M),
-            GaussianDecoder(ensemble_list),
+            GaussianDecoder([new_decoder()]),
             GaussianEncoder(new_encoder()),
         ).to(device)
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        train(
-            model,
-            optimizer,
-            mnist_train_loader,
-            args.epochs_per_decoder * args.num_decoders,
-            args.device,
-        )
-        os.makedirs(f"{experiments_folder}", exist_ok=True)
+        # 2. PHASE 1: Train or Load the Base VAE
+        if os.path.exists(base_model_path):
+            print(f"--- PHASE 1: Loading existing Base VAE for {run_id} (Frozen Latent Space) ---")
+            base_model.load_state_dict(torch.load(base_model_path, map_location=device))
+        else:
+            print(f"--- PHASE 1: Training NEW Base VAE for {run_id} (Frozen Latent Space) ---")
+            base_optimizer = torch.optim.Adam(base_model.parameters(), lr=1e-3)
+            train(
+                base_model,
+                base_optimizer,
+                mnist_train_loader,
+                args.epochs_per_decoder, # Standard 50 epochs
+                args.device,
+            )
+            # Save it so dec2 and dec3 can reuse this exact same latent space!
+            torch.save(base_model.state_dict(), base_model_path)
 
+        print(f"\n--- PHASE 2: Training Independent Ensemble ({args.num_decoders} Decoders) ---")
+        # 3. Extract the trained encoder and freeze it!
+        frozen_encoder = base_model.encoder
+        for param in frozen_encoder.parameters():
+            param.requires_grad = False
+
+        # 4. Create N brand new, independent decoders
+        ensemble_list = [new_decoder() for _ in range(args.num_decoders)]
+
+        # Train each decoder in a fully separate loop
+        for decoder_net in ensemble_list:
+            single_model = VAE(GaussianPrior(M), GaussianDecoder([decoder_net]), frozen_encoder).to(device)
+            dec_optimizer = torch.optim.Adam(single_model.decoder.parameters(), lr=1e-3)
+            train(single_model, dec_optimizer, mnist_train_loader, args.epochs_per_decoder, args.device)
+
+        # Assemble final ensemble model with the now-trained decoders + frozen encoder
+        ensemble_model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(ensemble_list),
+            frozen_encoder,
+        ).to(device)
+
+        # Save the final two-phase model
         torch.save(
-            model.state_dict(),
+            ensemble_model.state_dict(),
             f"{experiments_folder}/model.pt",
         )
 
