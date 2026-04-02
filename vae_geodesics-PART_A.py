@@ -15,6 +15,7 @@ from copy import deepcopy
 import os
 import math
 import matplotlib.pyplot as plt
+import numpy as np
 
 class GaussianPrior(nn.Module):
     def __init__(self, M):
@@ -496,12 +497,12 @@ if __name__ == "__main__":
         all_labels = torch.cat(all_labels, dim=0).numpy()
 
         print("Computing pull-back metric volume for background contour...")
-        # 1. Create a grid over the latent space bounds
+        # Create a grid over the latent space bounds
         margin = 0.5
         z1_min, z1_max = all_z[:, 0].min() - margin, all_z[:, 0].max() + margin
         z2_min, z2_max = all_z[:, 1].min() - margin, all_z[:, 1].max() + margin
         
-        # 35x35 grid = 1225 points. Increase resolution if you want smoother contours!
+        # 35x35 grid = 1225 points
         grid_res = 35 
         xx, yy = np.meshgrid(np.linspace(z1_min, z1_max, grid_res),
                              np.linspace(z2_min, z2_max, grid_res))
@@ -514,7 +515,7 @@ if __name__ == "__main__":
         volumes = []
         model.eval()
         
-        # 2. Compute sqrt(det(J^T J)) for every point in the grid
+        # Compute sqrt(det(J^T J)) for every point in the grid
         for z_pt in tqdm(grid_pts, desc="Calculating Metric Tensor"):
             # Compute Jacobian J of shape (784, 2)
             J = torch.autograd.functional.jacobian(get_decoder_mean, z_pt)
@@ -529,12 +530,11 @@ if __name__ == "__main__":
         # Create the plot
         plt.figure(figsize=(10, 8))
         
-        # 3. Draw the background contour (Blues colormap to look like an energy landscape)
+        # Draw the background contour
         contour = plt.contourf(xx, yy, vol_grid, levels=25, cmap='Blues', alpha=0.8)
         plt.colorbar(contour, label=r"Volume Measure $\sqrt{\det(G(z))}$")
 
-        # 4. Draw the scatter plot with a legend instead of a colorbar
-        # We use contrasting colors (Orange, Green, Purple) so they pop against the blue contour
+        # Draw the scatter plot with a legend for digit classes
         colors = ['darkorange', 'forestgreen', 'purple'] 
         for i, c in enumerate(np.unique(all_labels)):
             idx = all_labels == c
@@ -544,3 +544,70 @@ if __name__ == "__main__":
         plt.legend(title="Digit Classes", loc="upper right")
 
         print(f"Optimizing {args.num_curves} geodesics...")
+        
+        # Create the test_data_full tensor so we can sample from it
+        test_data_full = torch.cat([x for x, _ in mnist_test_loader], dim=0).to(device)
+
+        # Set the seed so the pairs match Part B
+        torch.manual_seed(42)
+
+        # Loop for user-specified number of curves
+        for i in range(args.num_curves):
+            print(f"\nOptimizing curve {i+1}/{args.num_curves}")
+
+            # Pick random images for start and end
+            idx = torch.randint(0, len(test_data_full), (2,))
+            x_start = test_data_full[idx[0]:idx[0]+1]
+            x_end = test_data_full[idx[1]:idx[1]+1]
+
+            # Encode to get fixed endpoints
+            z_start = model.encoder(x_start).mean.detach()
+            z_end = model.encoder(x_end).mean.detach()
+
+            # Initialize the straight line
+            t = torch.linspace(0, 1, args.num_t).view(-1, 1).to(device)
+            z_curve_init = (1 - t) * z_start + t * z_end
+            z_intermediate = z_curve_init[1:-1].clone().detach().requires_grad_(True)
+
+            with torch.no_grad():
+                init_energy = compute_energy(model, z_curve_init).item()
+
+            # Setup optimizer for this specific curve
+            curve_optimizer = torch.optim.Adam([z_intermediate], lr=5e-3)
+
+            # Runs the optimization of the curve
+            optimized_curve = optimize_geodesic(
+                model=model,
+                z_start=z_start,
+                z_intermediate=z_intermediate,
+                z_end=z_end,
+                optimizer=curve_optimizer,
+                num_steps=2000
+            )
+
+            with torch.no_grad():
+                final_energy = compute_energy(model, optimized_curve).item()
+            euc_dist = torch.norm(z_start - z_end).item()
+            reduction = (1 - final_energy / init_energy) * 100 if init_energy > 0 else 0.0
+            print(f"  energy: {init_energy:.4f} → {final_energy:.4f}  "
+                f"({reduction:.1f}% reduction)  euclidean dist: {euc_dist:.4f}")
+
+            # Add curves to the plot
+            # Convert tensors to numpy arrays for plotting
+            init_np = z_curve_init.cpu().detach().numpy()
+            opt_np = optimized_curve.cpu().detach().numpy()
+
+            # Plot straight line in gray, dashed
+            plt.plot(init_np[:, 0], init_np[:, 1], color='gray', linestyle='--', alpha=0.5)
+
+            # Plot the optimized geodesic in red, solid
+            plt.plot(opt_np[:, 0], opt_np[:, 1], color='red', linewidth=2, alpha=0.8)
+
+        # Save the final image
+        plt.title("Latent Space and Pull-back Geodesics")
+        plt.xlabel("z1")
+        plt.ylabel("z2")
+        plt.tight_layout()
+        plt.savefig(f"{args.experiment_folder}/geodesics.png", dpi=300)
+        plt.close()
+        print(f"Done! Plot saved to {args.experiment_folder}/geodesics.png")
